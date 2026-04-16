@@ -5,9 +5,12 @@ sentence-transformers
 torch
 accelerate>=0.27.0
 
-# Quantization & Fine-tuning
-# bitsandbytes 0.43+ does not have a macOS wheel — use 0.42.0 on Mac
-bitsandbytes==0.42.0
+# Apple MLX -- native Neural Engine support for M-series Macs
+mlx
+mlx-lm>=0.19.0
+
+# Quantization & Fine-tuning (CUDA only -- kept for reference/Colab use)
+# bitsandbytes==0.42.0
 peft>=0.10.0
 trl>=0.8.6
 
@@ -25,9 +28,6 @@ openai
 evaluate
 rouge_score
 bert_score
-
-# Experiment tracking (optional)
-wandb
 
 # Utilities
 tqdm
