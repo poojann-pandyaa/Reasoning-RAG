@@ -1,7 +1,7 @@
 """
 prepare_finetune.py
 -------------------
-Converts processed_dataset.jsonl  →  finetune_dataset.jsonl
+Converts processed_dataset.jsonl -> finetune_dataset.jsonl
 
 Each output record is a Gemma-IT instruction-following example:
 {
@@ -12,7 +12,7 @@ Each output record is a Gemma-IT instruction-following example:
 }
 
 Usage:
-  python src/ingestion/prepare_finetune.py \
+  python3 src/ingestion/prepare_finetune.py \
       --input  data/processed_dataset.jsonl \
       --output data/finetune_dataset.jsonl
 """
@@ -21,9 +21,10 @@ import argparse
 import json
 import random
 from pathlib import Path
+from typing import Optional  # Python 3.9 compatible
 
 
-def pick_best_answer(answers: list) -> dict | None:
+def pick_best_answer(answers: list) -> Optional[dict]:  # use Optional instead of dict | None
     """Return the accepted answer if present, otherwise the highest-scored one."""
     if not answers:
         return None
@@ -37,7 +38,7 @@ def format_gemma_chat(question: str, answer: str) -> str:
     """Wrap in Gemma-IT <start_of_turn> chat template."""
     return (
         "<start_of_turn>user\n"
-        f"You are a helpful software engineering assistant.\n\n"
+        "You are a helpful software engineering assistant.\n\n"
         f"Question: {question}\n"
         "<end_of_turn>\n"
         "<start_of_turn>model\n"
@@ -97,7 +98,7 @@ def main():
             written += 1
 
     print(f"Done. Written: {written} | Skipped: {skipped}")
-    print(f"Output → {output_path}")
+    print(f"Output -> {output_path}")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
 import os
 import torch
+from typing import Optional  # Python 3.9 compatible
 from transformers import (
     AutoTokenizer,
     AutoModelForCausalLM,
@@ -10,7 +11,7 @@ from peft import PeftModel
 from langchain_community.llms.huggingface_pipeline import HuggingFacePipeline
 
 
-def _get_device():
+def _get_device() -> str:
     if torch.cuda.is_available():
         return "cuda"
     if torch.backends.mps.is_available():
@@ -18,13 +19,16 @@ def _get_device():
     return "cpu"
 
 
-def _load_model_and_tokenizer(model_name: str, lora_adapter_path: str | None, device: str):
+def _load_model_and_tokenizer(
+    model_name: str,
+    lora_adapter_path: Optional[str],
+    device: str,
+):
     """
-    Load base model (optionally with a LoRA adapter) using 4-bit quantization
-    on CUDA, or plain fp32/bf16 on MPS/CPU.
+    Load base model (optionally with a LoRA adapter).
+    Uses 4-bit quantization on CUDA; plain fp32 on MPS/CPU.
     """
     tokenizer = AutoTokenizer.from_pretrained(model_name)
-    # Gemma tokenizer doesn't set a pad token by default
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
@@ -42,7 +46,7 @@ def _load_model_and_tokenizer(model_name: str, lora_adapter_path: str | None, de
             trust_remote_code=True,
         )
     else:
-        # MPS / CPU — no bitsandbytes support; load in float32
+        # MPS / CPU -- bitsandbytes 4-bit not supported; load in float32
         model = AutoModelForCausalLM.from_pretrained(
             model_name,
             torch_dtype=torch.float32,
@@ -50,11 +54,10 @@ def _load_model_and_tokenizer(model_name: str, lora_adapter_path: str | None, de
             trust_remote_code=True,
         )
 
-    # Attach LoRA adapter if one has been fine-tuned
     if lora_adapter_path and os.path.isdir(lora_adapter_path):
         print(f"Loading LoRA adapter from {lora_adapter_path} ...")
         model = PeftModel.from_pretrained(model, lora_adapter_path)
-        model = model.merge_and_unload()   # fuse weights for faster inference
+        model = model.merge_and_unload()
 
     model.eval()
     return model, tokenizer
@@ -69,7 +72,7 @@ class FinalGenerator:
     def __init__(
         self,
         model_name: str = "google/gemma-2b-it",
-        lora_adapter_path: str | None = None,
+        lora_adapter_path: Optional[str] = None,
         max_new_tokens: int = 512,
     ):
         print(f"Loading generator model: {model_name} ...")
@@ -87,29 +90,28 @@ class FinalGenerator:
             temperature=0.7,
             top_p=0.9,
             repetition_penalty=1.1,
-            return_full_text=False,   # return only the generated portion
+            return_full_text=False,
             device_map="auto" if device == "cuda" else None,
         )
         self.llm = HuggingFacePipeline(pipeline=hf_pipe)
         self.tokenizer = tokenizer
 
-    # ------------------------------------------------------------------
-    # Prompt construction
-    # ------------------------------------------------------------------
-
-    def build_prompt(self, query: str, retrieved_chunks: list, reasoning_type: str, sub_questions: list) -> str:
+    def build_prompt(
+        self,
+        query: str,
+        retrieved_chunks: list,
+        reasoning_type: str,
+        sub_questions: list,
+    ) -> str:
         """Build a Gemma-IT instruction-following prompt from retrieved evidence."""
 
-        # Use top-3 sources (Gemma-2B can handle ~2 K tokens comfortably)
         context_parts = []
         for i, cand in enumerate(retrieved_chunks[:3]):
             meta = cand["metadata"]
             score      = meta.get("score", 0)
             is_acc     = meta.get("is_accepted", False)
-            chunk_text = meta.get("chunk_text", "")
+            chunk_text = meta.get("chunk_text", "")[:800]
             domain     = meta.get("domain", "unknown")
-            # Allow up to 800 chars per source (vs. 500 for flan-t5)
-            chunk_text = chunk_text[:800]
             context_parts.append(
                 f"[Source {i+1} | Score: {score} | Accepted: {is_acc} | Domain: {domain}]\n{chunk_text}"
             )
@@ -128,9 +130,9 @@ class FinalGenerator:
             ),
             "strategic": (
                 "This is a complex comparative or architectural question. "
-                "Step 1 — identify the main categories or dimensions relevant to the query. "
-                "Step 2 — discuss each dimension using evidence from the sources. "
-                "Step 3 — write a final synthesised recommendation."
+                "Step 1 - identify the main categories or dimensions relevant to the query. "
+                "Step 2 - discuss each dimension using evidence from the sources. "
+                "Step 3 - write a final synthesised recommendation."
             ),
         }
         cot_instruction = cot_instructions.get(reasoning_type, cot_instructions["commonsense"])
@@ -141,7 +143,6 @@ class FinalGenerator:
                 f"  {idx+1}. {sq}" for idx, sq in enumerate(sub_questions)
             ) + "\n\n"
 
-        # Gemma-IT chat format: <start_of_turn>user ... <end_of_turn><start_of_turn>model
         prompt = (
             "<start_of_turn>user\n"
             "You are a senior software engineer answering based strictly on the retrieved Stack Exchange evidence below.\n\n"
@@ -154,27 +155,18 @@ class FinalGenerator:
         )
         return prompt
 
-    # ------------------------------------------------------------------
-    # Self-consistency: pick most confident answer via log-prob scoring
-    # ------------------------------------------------------------------
-
-    def _score_response(self, prompt: str, response: str) -> float:
-        """Approximate confidence: ratio of unique tokens (avoids repetitive answers)."""
+    def _score_response(self, response: str) -> float:
+        """Lexical diversity score — avoids repetitive answers."""
         tokens = response.split()
         if not tokens:
             return 0.0
-        return len(set(tokens)) / len(tokens)   # lexical diversity as proxy
+        return len(set(tokens)) / len(tokens)
 
     def generate_with_consistency(self, prompt: str, n: int = 3) -> str:
         print(f"Applying self-consistency decoding (n={n}) ...")
         responses = [self.llm.invoke(prompt) for _ in range(n)]
-        # Score by lexical diversity (better than raw length)
-        scored = [(self._score_response(prompt, r), r) for r in responses]
+        scored = [(self._score_response(r), r) for r in responses]
         return max(scored, key=lambda x: x[0])[1]
-
-    # ------------------------------------------------------------------
-    # Main entry point
-    # ------------------------------------------------------------------
 
     def generate(self, trace):
         r_type = trace.classification.get("reasoning_type", "commonsense")

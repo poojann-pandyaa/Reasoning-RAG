@@ -6,7 +6,8 @@ torch
 accelerate>=0.27.0
 
 # Quantization & Fine-tuning
-bitsandbytes>=0.43.0
+# bitsandbytes 0.43+ does not have a macOS wheel — use 0.42.0 on Mac
+bitsandbytes==0.42.0
 peft>=0.10.0
 trl>=0.8.6
 
@@ -25,7 +26,7 @@ evaluate
 rouge_score
 bert_score
 
-# Experiment tracking (optional but recommended)
+# Experiment tracking (optional)
 wandb
 
 # Utilities
