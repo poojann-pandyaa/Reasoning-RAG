@@ -1,0 +1,18 @@
+{
+  "stackoverflow": "Procedural",
+  "superuser": "Procedural",
+  "serverfault": "Procedural",
+  "askubuntu": "Procedural",
+  "unix": "Procedural",
+  "math": "Analytical",
+  "stats": "Analytical",
+  "datascience": "Analytical",
+  "english": "Linguistic",
+  "writing": "Linguistic",
+  "physics": "Conceptual",
+  "chemistry": "Conceptual",
+  "workplace": "Opinion",
+  "academia": "Opinion",
+  "softwareengineering": "Conceptual",
+  "dba": "Procedural"
+}

@@ -1,0 +1,14 @@
+datasets
+transformers
+sentence-transformers
+faiss-cpu
+rank_bm25
+langchain
+langchain-openai
+openai
+evaluate
+rouge_score
+bert_score
+tqdm
+pandas
+beautifulsoup4
