@@ -5,7 +5,7 @@ Optimised for M1/M2/M3/M4 Apple Silicon Macs.
 Uses the Neural Engine via MLX -- 3-5x faster than PyTorch MPS.
 
 Expected time on M4 16GB:
-  ~45-90 minutes for 1000 iterations (roughly 3 epochs on 900 examples)
+  ~45-90 minutes for 1000 iterations
 
 Usage:
   python3 src/train_mlx.py
@@ -30,7 +30,7 @@ OUTPUT_DIR   = "outputs/gemma-2-2b-it-mlx-lora"
 ITERS        = 1000
 BATCH_SIZE   = 4
 LEARN_RATE   = 2e-4
-LORA_LAYERS  = 8
+NUM_LAYERS   = 8      # --num-layers (renamed from --lora-layers in newer mlx_lm)
 VAL_BATCHES  = 25
 
 
@@ -46,8 +46,7 @@ def check_mlx():
 
 def convert_to_mlx_format(src: str = "data/finetune_dataset.jsonl"):
     """
-    MLX-LM expects a data/ dir with train.jsonl, valid.jsonl, test.jsonl.
-    Each line must have a single 'text' key with the full formatted string.
+    MLX-LM expects train.jsonl / valid.jsonl / test.jsonl with a 'text' key.
     Split: 80 / 10 / 10.
     """
     src_path = Path(src)
@@ -90,15 +89,17 @@ def convert_to_mlx_format(src: str = "data/finetune_dataset.jsonl"):
 def run_training():
     Path(OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
 
+    # New mlx_lm CLI: `mlx_lm.lora` subcommand syntax
+    # --lora-layers was renamed to --num-layers in mlx_lm >= 0.18
     cmd = [
-        sys.executable, "-m", "mlx_lm.lora",
+        sys.executable, "-m", "mlx_lm", "lora",
         "--model",         MODEL_NAME,
         "--data",          DATA_DIR,
         "--train",
         "--batch-size",    str(BATCH_SIZE),
         "--iters",         str(ITERS),
         "--learning-rate", str(LEARN_RATE),
-        "--lora-layers",   str(LORA_LAYERS),
+        "--num-layers",    str(NUM_LAYERS),
         "--val-batches",   str(VAL_BATCHES),
         "--adapter-path",  OUTPUT_DIR,
         "--save-every",    "200",
@@ -114,7 +115,7 @@ def fuse_adapter():
     fused_dir = "outputs/gemma-2-2b-it-fused"
     Path(fused_dir).mkdir(parents=True, exist_ok=True)
     cmd = [
-        sys.executable, "-m", "mlx_lm.fuse",
+        sys.executable, "-m", "mlx_lm", "fuse",
         "--model",        MODEL_NAME,
         "--adapter-path", OUTPUT_DIR,
         "--save-path",    fused_dir,
