@@ -1,14 +1,34 @@
+# Core ML
+transformers>=4.40.0
 datasets
-transformers
 sentence-transformers
+torch
+accelerate>=0.27.0
+
+# Quantization & Fine-tuning
+bitsandbytes>=0.43.0
+peft>=0.10.0
+trl>=0.8.6
+
+# Retrieval
 faiss-cpu
 rank_bm25
+
+# LangChain
 langchain
+langchain-community
 langchain-openai
 openai
+
+# Evaluation
 evaluate
 rouge_score
 bert_score
+
+# Experiment tracking (optional but recommended)
+wandb
+
+# Utilities
 tqdm
 pandas
 beautifulsoup4

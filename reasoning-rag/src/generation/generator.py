@@ -1,79 +1,192 @@
 import os
 import torch
-from transformers import pipeline
+from transformers import (
+    AutoTokenizer,
+    AutoModelForCausalLM,
+    BitsAndBytesConfig,
+    pipeline,
+)
+from peft import PeftModel
 from langchain_community.llms.huggingface_pipeline import HuggingFacePipeline
-from langchain.prompts import PromptTemplate
+
+
+def _get_device():
+    if torch.cuda.is_available():
+        return "cuda"
+    if torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
+
+
+def _load_model_and_tokenizer(model_name: str, lora_adapter_path: str | None, device: str):
+    """
+    Load base model (optionally with a LoRA adapter) using 4-bit quantization
+    on CUDA, or plain fp32/bf16 on MPS/CPU.
+    """
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    # Gemma tokenizer doesn't set a pad token by default
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    if device == "cuda":
+        bnb_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.bfloat16,
+            bnb_4bit_use_double_quant=True,
+        )
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            quantization_config=bnb_config,
+            device_map="auto",
+            trust_remote_code=True,
+        )
+    else:
+        # MPS / CPU — no bitsandbytes support; load in float32
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            torch_dtype=torch.float32,
+            device_map={"" : device},
+            trust_remote_code=True,
+        )
+
+    # Attach LoRA adapter if one has been fine-tuned
+    if lora_adapter_path and os.path.isdir(lora_adapter_path):
+        print(f"Loading LoRA adapter from {lora_adapter_path} ...")
+        model = PeftModel.from_pretrained(model, lora_adapter_path)
+        model = model.merge_and_unload()   # fuse weights for faster inference
+
+    model.eval()
+    return model, tokenizer
+
 
 class FinalGenerator:
-    def __init__(self, model_name="google/flan-t5-base"):
-        print(f"Loading local LLM for generation: {model_name}...")
-        hf_pipeline = pipeline(
-            "text2text-generation",
-            model=model_name,
-            max_new_tokens=512,
-            device="cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
+    """
+    Drop-in replacement for the old flan-t5-base generator.
+    Uses google/gemma-2b-it (causal LM) with optional LoRA adapter.
+    """
+
+    def __init__(
+        self,
+        model_name: str = "google/gemma-2b-it",
+        lora_adapter_path: str | None = None,
+        max_new_tokens: int = 512,
+    ):
+        print(f"Loading generator model: {model_name} ...")
+        device = _get_device()
+        print(f"  Device selected: {device}")
+
+        model, tokenizer = _load_model_and_tokenizer(model_name, lora_adapter_path, device)
+
+        hf_pipe = pipeline(
+            "text-generation",
+            model=model,
+            tokenizer=tokenizer,
+            max_new_tokens=max_new_tokens,
+            do_sample=True,
+            temperature=0.7,
+            top_p=0.9,
+            repetition_penalty=1.1,
+            return_full_text=False,   # return only the generated portion
+            device_map="auto" if device == "cuda" else None,
         )
-        self.llm = HuggingFacePipeline(pipeline=hf_pipeline)
-        
-    def build_prompt(self, query, retrieved_chunks, reasoning_type, sub_questions):
+        self.llm = HuggingFacePipeline(pipeline=hf_pipe)
+        self.tokenizer = tokenizer
+
+    # ------------------------------------------------------------------
+    # Prompt construction
+    # ------------------------------------------------------------------
+
+    def build_prompt(self, query: str, retrieved_chunks: list, reasoning_type: str, sub_questions: list) -> str:
+        """Build a Gemma-IT instruction-following prompt from retrieved evidence."""
+
+        # Use top-3 sources (Gemma-2B can handle ~2 K tokens comfortably)
         context_parts = []
-        for i, cand in enumerate(retrieved_chunks):
-            # Hard limit to top 1 candidate for FLAN-T5-Base sizing
-            if i >= 1:
-                break
-            meta = cand['metadata']
-            score = meta.get('score', 0)
-            is_acc = meta.get('is_accepted', False)
-            chunk_text = meta.get('chunk_text', '')
-            # Truncate strictly to smaller pieces
-            chunk_text = chunk_text[:500] if len(chunk_text) > 500 else chunk_text
-            domain = meta.get('domain', 'unknown')
-            context_parts.append(f"[Source {i+1} | Score: {score} | Accepted: {is_acc} | Domain: {domain}]\n{chunk_text}")
-            
+        for i, cand in enumerate(retrieved_chunks[:3]):
+            meta = cand["metadata"]
+            score      = meta.get("score", 0)
+            is_acc     = meta.get("is_accepted", False)
+            chunk_text = meta.get("chunk_text", "")
+            domain     = meta.get("domain", "unknown")
+            # Allow up to 800 chars per source (vs. 500 for flan-t5)
+            chunk_text = chunk_text[:800]
+            context_parts.append(
+                f"[Source {i+1} | Score: {score} | Accepted: {is_acc} | Domain: {domain}]\n{chunk_text}"
+            )
+
         context = "\n\n".join(context_parts)
-        
+
         cot_instructions = {
-            "commonsense": "Answer the question directly based on the sources above.",
-            "adaptive": "First address each sub-question separately, then synthesise into a unified answer.",
-            "strategic": "First identify the main categories relevant to this query. Then address each category using the sources. Finally, provide a synthesised cross-category answer."
+            "commonsense": (
+                "Answer the question directly and concisely based on the sources above. "
+                "Cite which source you used."
+            ),
+            "adaptive": (
+                "The question has multiple parts. "
+                "First address each sub-question separately using the sources, "
+                "then synthesise everything into a single unified answer."
+            ),
+            "strategic": (
+                "This is a complex comparative or architectural question. "
+                "Step 1 — identify the main categories or dimensions relevant to the query. "
+                "Step 2 — discuss each dimension using evidence from the sources. "
+                "Step 3 — write a final synthesised recommendation."
+            ),
         }
         cot_instruction = cot_instructions.get(reasoning_type, cot_instructions["commonsense"])
-        
-        prompt = f"""You are a technical expert answering based on retrieved Stack Exchange content.
 
-Retrieved context:
-{context}
+        sub_q_block = ""
+        if sub_questions and sub_questions != [query]:
+            sub_q_block = "Sub-questions to address:\n" + "\n".join(
+                f"  {idx+1}. {sq}" for idx, sq in enumerate(sub_questions)
+            ) + "\n\n"
 
-Sub-questions to address: {sub_questions}
-
-Instruction: {cot_instruction}
-
-Question: {query}
-
-Reason step by step through the evidence before writing your final answer.
-"""
+        # Gemma-IT chat format: <start_of_turn>user ... <end_of_turn><start_of_turn>model
+        prompt = (
+            "<start_of_turn>user\n"
+            "You are a senior software engineer answering based strictly on the retrieved Stack Exchange evidence below.\n\n"
+            f"Retrieved Evidence:\n{context}\n\n"
+            f"{sub_q_block}"
+            f"Instruction: {cot_instruction}\n\n"
+            f"Question: {query}\n"
+            "<end_of_turn>\n"
+            "<start_of_turn>model\n"
+        )
         return prompt
 
-    def generate_with_consistency(self, prompt, n=3):
-        print(f"Applying self-consistency decoding (n={n})...")
-        # Since local generation without varied temperature is mostly deterministic for greedy,
-        # we still mimic it. If we wanted true diversity, we would configure the pipeline with do_sample=True, temperature=0.7.
+    # ------------------------------------------------------------------
+    # Self-consistency: pick most confident answer via log-prob scoring
+    # ------------------------------------------------------------------
+
+    def _score_response(self, prompt: str, response: str) -> float:
+        """Approximate confidence: ratio of unique tokens (avoids repetitive answers)."""
+        tokens = response.split()
+        if not tokens:
+            return 0.0
+        return len(set(tokens)) / len(tokens)   # lexical diversity as proxy
+
+    def generate_with_consistency(self, prompt: str, n: int = 3) -> str:
+        print(f"Applying self-consistency decoding (n={n}) ...")
         responses = [self.llm.invoke(prompt) for _ in range(n)]
-        # Simple heuristic: longest response usually packs the most complete synthesis
-        return max(responses, key=len)
+        # Score by lexical diversity (better than raw length)
+        scored = [(self._score_response(prompt, r), r) for r in responses]
+        return max(scored, key=lambda x: x[0])[1]
+
+    # ------------------------------------------------------------------
+    # Main entry point
+    # ------------------------------------------------------------------
 
     def generate(self, trace):
         r_type = trace.classification.get("reasoning_type", "commonsense")
-        sq = trace.classification.get("sub_questions", [])
-        
+        sq     = trace.classification.get("sub_questions", [])
+
         prompt = self.build_prompt(trace.query, trace.reranked_final, r_type, sq)
         trace.generation_prompt = prompt
-        
+
         if r_type == "strategic":
-            # high stakes query
             answer = self.generate_with_consistency(prompt, n=3)
         else:
             answer = self.llm.invoke(prompt)
-            
+
         trace.final_answer = answer
         return trace
