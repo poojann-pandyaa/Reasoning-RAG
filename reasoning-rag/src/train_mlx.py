@@ -1,6 +1,6 @@
 """
-train_mlx.py -- LoRA fine-tuning for Gemma-2B-IT using Apple MLX
-=================================================================
+train_mlx.py -- LoRA fine-tuning for Gemma-2-2B-IT using Apple MLX
+====================================================================
 Optimised for M1/M2/M3/M4 Apple Silicon Macs.
 Uses the Neural Engine via MLX -- 3-5x faster than PyTorch MPS.
 
@@ -11,7 +11,7 @@ Usage:
   python3 src/train_mlx.py
 
 Output:
-  outputs/gemma-2b-it-mlx-lora/  -- LoRA adapter weights (~50-100 MB)
+  outputs/gemma-2-2b-it-mlx-lora/  -- LoRA adapter weights (~50-100 MB)
 
 Requirements:
   pip3 install mlx mlx-lm
@@ -24,13 +24,13 @@ import json
 from pathlib import Path
 
 
-MODEL_NAME   = "google/gemma-2b-it"
+MODEL_NAME   = "google/gemma-2-2b-it"
 DATA_DIR     = "data/mlx_data"
-OUTPUT_DIR   = "outputs/gemma-2b-it-mlx-lora"
-ITERS        = 1000    # ~3 epochs on 900 train examples with batch=4
-BATCH_SIZE   = 4       # safe for M4 16GB
+OUTPUT_DIR   = "outputs/gemma-2-2b-it-mlx-lora"
+ITERS        = 1000
+BATCH_SIZE   = 4
 LEARN_RATE   = 2e-4
-LORA_LAYERS  = 8       # number of transformer layers to apply LoRA
+LORA_LAYERS  = 8
 VAL_BATCHES  = 25
 
 
@@ -46,9 +46,9 @@ def check_mlx():
 
 def convert_to_mlx_format(src: str = "data/finetune_dataset.jsonl"):
     """
-    MLX-LM expects a data/ directory with train.jsonl, valid.jsonl, test.jsonl.
-    Each line must have a single "text" key with the full formatted string.
-    We split 80/10/10 from finetune_dataset.jsonl.
+    MLX-LM expects a data/ dir with train.jsonl, valid.jsonl, test.jsonl.
+    Each line must have a single 'text' key with the full formatted string.
+    Split: 80 / 10 / 10.
     """
     src_path = Path(src)
     if not src_path.exists():
@@ -62,10 +62,9 @@ def convert_to_mlx_format(src: str = "data/finetune_dataset.jsonl"):
             line = line.strip()
             if line:
                 record = json.loads(line)
-                # MLX only needs the 'text' field
                 records.append({"text": record["text"]})
 
-    total = len(records)
+    total     = len(records)
     train_end = int(total * 0.80)
     val_end   = int(total * 0.90)
 
@@ -93,16 +92,16 @@ def run_training():
 
     cmd = [
         sys.executable, "-m", "mlx_lm.lora",
-        "--model",        MODEL_NAME,
-        "--data",         DATA_DIR,
+        "--model",         MODEL_NAME,
+        "--data",          DATA_DIR,
         "--train",
-        "--batch-size",   str(BATCH_SIZE),
-        "--iters",        str(ITERS),
-        "--learning-rate",str(LEARN_RATE),
-        "--lora-layers",  str(LORA_LAYERS),
-        "--val-batches",  str(VAL_BATCHES),
-        "--adapter-path", OUTPUT_DIR,
-        "--save-every",   "200",       # checkpoint every 200 iters
+        "--batch-size",    str(BATCH_SIZE),
+        "--iters",         str(ITERS),
+        "--learning-rate", str(LEARN_RATE),
+        "--lora-layers",   str(LORA_LAYERS),
+        "--val-batches",   str(VAL_BATCHES),
+        "--adapter-path",  OUTPUT_DIR,
+        "--save-every",    "200",
     ]
 
     print("\nStarting MLX LoRA fine-tuning ...")
@@ -112,14 +111,8 @@ def run_training():
 
 
 def fuse_adapter():
-    """
-    Optional: fuse the LoRA adapter back into the base model weights.
-    Creates a standalone model in outputs/gemma-2b-it-fused/
-    Useful if you want a single model file without adapter loading overhead.
-    """
-    fused_dir = "outputs/gemma-2b-it-fused"
+    fused_dir = "outputs/gemma-2-2b-it-fused"
     Path(fused_dir).mkdir(parents=True, exist_ok=True)
-
     cmd = [
         sys.executable, "-m", "mlx_lm.fuse",
         "--model",        MODEL_NAME,
@@ -143,7 +136,7 @@ if __name__ == "__main__":
     check_mlx()
 
     print("=" * 60)
-    print(" Reasoning-RAG -- MLX Fine-tuning (M4 Mac)")
+    print(" Reasoning-RAG -- MLX Fine-tuning (M4 Mac, Gemma-2-2B-IT)")
     print("=" * 60)
 
     if not args.skip_data_prep:
@@ -152,7 +145,7 @@ if __name__ == "__main__":
     else:
         print("\nStep 1: Skipping data prep (--skip-data-prep set)")
 
-    print("\nStep 2: Fine-tuning Gemma-2B-IT with LoRA ...")
+    print("\nStep 2: Fine-tuning Gemma-2-2B-IT with LoRA ...")
     run_training()
 
     if args.fuse:
@@ -163,5 +156,5 @@ if __name__ == "__main__":
     print("Training complete!")
     print(f"LoRA adapter saved to: {OUTPUT_DIR}")
     print("\nTo run inference with fine-tuned model:")
-    print("  python3 src/demo.py --adapter outputs/gemma-2b-it-mlx-lora")
+    print("  python3 src/demo.py --adapter outputs/gemma-2-2b-it-mlx-lora")
     print("=" * 60)

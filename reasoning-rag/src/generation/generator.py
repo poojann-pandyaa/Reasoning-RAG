@@ -4,6 +4,7 @@ generator.py
 FinalGenerator using MLX-native inference on Apple Silicon (M1/M2/M3/M4).
 Falls back to PyTorch (MPS -> CPU) if MLX is unavailable.
 
+Default model: google/gemma-2-2b-it (Gemma 2 -- upgraded from Gemma 1)
 For fine-tuning, see: src/train_mlx.py
 """
 
@@ -21,18 +22,13 @@ def _mlx_available() -> bool:
 
 
 # ---------------------------------------------------------------------------
-# MLX-based generator (primary path on Apple Silicon)
+# MLX backend (primary -- Apple Silicon)
 # ---------------------------------------------------------------------------
 
 class _MLXGenerator:
-    """
-    Uses mlx_lm.load + mlx_lm.generate for fast Apple Silicon inference.
-    Supports base model and LoRA adapter (trained with train_mlx.py).
-    """
-
     def __init__(
         self,
-        model_name: str = "google/gemma-2b-it",
+        model_name: str = "google/gemma-2-2b-it",
         lora_adapter_path: Optional[str] = None,
         max_new_tokens: int = 512,
     ):
@@ -62,23 +58,18 @@ class _MLXGenerator:
 
 
 # ---------------------------------------------------------------------------
-# PyTorch fallback generator (non-Apple or MLX not installed)
+# PyTorch fallback (non-Apple or MLX not installed)
 # ---------------------------------------------------------------------------
 
 class _TorchGenerator:
-    """
-    Fallback: uses HuggingFace Transformers + PyTorch MPS/CPU.
-    """
-
     def __init__(
         self,
-        model_name: str = "google/gemma-2b-it",
+        model_name: str = "google/gemma-2-2b-it",
         lora_adapter_path: Optional[str] = None,
         max_new_tokens: int = 512,
     ):
         import torch
         from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
-        from peft import PeftModel
 
         device = (
             "cuda" if torch.cuda.is_available()
@@ -130,24 +121,21 @@ class FinalGenerator:
     """
     Drop-in replacement for the old flan-t5-base generator.
     Automatically uses MLX on Apple Silicon, falls back to PyTorch elsewhere.
+    Default model: google/gemma-2-2b-it
     """
 
     def __init__(
         self,
-        model_name: str = "google/gemma-2b-it",
+        model_name: str = "google/gemma-2-2b-it",
         lora_adapter_path: Optional[str] = None,
         max_new_tokens: int = 512,
     ):
         if _mlx_available():
-            print("[Generator] Backend: MLX (Apple Silicon -- recommended)")
+            print("[Generator] Backend: MLX (Apple Silicon)")
             self._backend = _MLXGenerator(model_name, lora_adapter_path, max_new_tokens)
         else:
-            print("[Generator] Backend: PyTorch (MLX not found -- install mlx-lm for best performance)")
+            print("[Generator] Backend: PyTorch (install mlx-lm for better performance on Mac)")
             self._backend = _TorchGenerator(model_name, lora_adapter_path, max_new_tokens)
-
-    # -----------------------------------------------------------------------
-    # Prompt builder
-    # -----------------------------------------------------------------------
 
     def build_prompt(
         self,
@@ -194,7 +182,7 @@ class FinalGenerator:
                 f"  {idx+1}. {sq}" for idx, sq in enumerate(sub_questions)
             ) + "\n\n"
 
-        # Gemma-IT chat template
+        # Gemma-2 IT chat template
         prompt = (
             "<start_of_turn>user\n"
             "You are a senior software engineer answering based strictly on the retrieved Stack Exchange evidence below.\n\n"
@@ -207,12 +195,7 @@ class FinalGenerator:
         )
         return prompt
 
-    # -----------------------------------------------------------------------
-    # Self-consistency
-    # -----------------------------------------------------------------------
-
     def _score_response(self, response: str) -> float:
-        """Lexical diversity score -- avoids picking repetitive answers."""
         tokens = response.split()
         if not tokens:
             return 0.0
@@ -223,10 +206,6 @@ class FinalGenerator:
         responses = [self._backend.invoke(prompt) for _ in range(n)]
         scored    = [(self._score_response(r), r) for r in responses]
         return max(scored, key=lambda x: x[0])[1]
-
-    # -----------------------------------------------------------------------
-    # Main entry point
-    # -----------------------------------------------------------------------
 
     def generate(self, trace):
         r_type = trace.classification.get("reasoning_type", "commonsense")

@@ -13,14 +13,14 @@ def parse_args():
         "--adapter",
         type=str,
         default=None,
-        help="Path to LoRA adapter directory (e.g. outputs/gemma-2b-it-mlx-lora). "
-             "If not provided, uses the base Gemma-2B-IT model."
+        help="Path to LoRA adapter directory (e.g. outputs/gemma-2-2b-it-mlx-lora). "
+             "If not provided, uses the base model."
     )
     parser.add_argument(
         "--model",
         type=str,
-        default="google/gemma-2b-it",
-        help="HuggingFace model name or local path (default: google/gemma-2b-it)"
+        default="google/gemma-2-2b-it",
+        help="HuggingFace model name (default: google/gemma-2-2b-it)"
     )
     return parser.parse_args()
 
@@ -42,6 +42,7 @@ def run_demo():
         )
     except Exception as e:
         print(f"Failed to initialize system. Error: {e}")
+        import traceback; traceback.print_exc()
         return
 
     print("\nType your question below (or 'quit' to exit):")
@@ -60,11 +61,11 @@ def run_demo():
         print(f"=== Query ===\n{query}\n")
 
         # Phase 1: Classification
-        classification  = classifier.classify(query)
-        intent          = classification.get('intent', 'unknown')
-        r_type          = classification.get('reasoning_type', 'commonsense')
-        scope           = classification.get('scope', 'unknown')
-        sub_questions   = classification.get('sub_questions', [])
+        classification = classifier.classify(query)
+        intent         = classification.get('intent', 'unknown')
+        r_type         = classification.get('reasoning_type', 'commonsense')
+        scope          = classification.get('scope', 'unknown')
+        sub_questions  = classification.get('sub_questions', [])
 
         print(f"=== Classification ===")
         print(f"Intent: {intent} | Reasoning type: {r_type} | Scope: {scope}\n")

@@ -12,19 +12,19 @@ from generation.generator import FinalGenerator
 class ReasoningEngine:
     def __init__(
         self,
-        model_name: str = "google/gemma-2b-it",
+        model_name: str = "google/gemma-2-2b-it",
         lora_adapter_path: Optional[str] = None,
     ):
         print("Initializing Reasoning Engine...")
-        self.retriever  = HybridRetriever()
-        self.reranker   = ContextReRanker()
-        self.generator  = FinalGenerator(
+        self.retriever = HybridRetriever()
+        self.reranker  = ContextReRanker()
+        self.generator = FinalGenerator(
             model_name=model_name,
             lora_adapter_path=lora_adapter_path,
         )
 
     def deduplicate(self, candidates):
-        seen   = set()
+        seen    = set()
         deduped = []
         for cand in candidates:
             if cand['chunk_id'] not in seen:
@@ -42,8 +42,8 @@ class ReasoningEngine:
 
     def adaptive_path(self, trace):
         print("Executing Adaptive Path...")
-        sub_questions   = trace.classification.get("sub_questions", [])
-        all_candidates  = []
+        sub_questions  = trace.classification.get("sub_questions", [])
+        all_candidates = []
         for sq in sub_questions:
             print(f"Retrieving for sub-question: {sq}")
             cands  = self.retriever.hybrid_retrieve(sq, top_k=10)
@@ -55,9 +55,9 @@ class ReasoningEngine:
 
     def strategic_path(self, trace):
         print("Executing Strategic Path...")
-        sub_questions      = trace.classification.get("sub_questions", [])
-        level1_candidates  = self.retriever.hybrid_retrieve(trace.query, top_k=10)
-        all_candidates     = level1_candidates
+        sub_questions     = trace.classification.get("sub_questions", [])
+        level1_candidates = self.retriever.hybrid_retrieve(trace.query, top_k=10)
+        all_candidates    = level1_candidates
         trace.retrieved_per_subquery["level1_main"] = [r['chunk_id'] for r in level1_candidates[:3]]
         for sq in sub_questions:
             print(f"Retrieving for sub-category/question: {sq}")
