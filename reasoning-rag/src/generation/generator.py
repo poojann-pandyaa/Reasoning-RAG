@@ -49,11 +49,9 @@ class _MLXGenerator:
         from mlx_lm import generate
         from mlx_lm.sample_utils import make_sampler, make_repetition_penalty
 
-        # make_sampler handles temp + top_p
         sampler = make_sampler(temp=0.7, top_p=0.9)
 
         # make_repetition_penalty is the correct API in mlx_lm 0.29.x
-        # penalty=1.2 prevents repetition loops, context_size=20 looks back 20 tokens
         repetition_penalty = make_repetition_penalty(
             penalty=1.2,
             context_size=20,
@@ -200,6 +198,10 @@ class FinalGenerator:
         prompt = (
             "<start_of_turn>user\n"
             "You are a senior software engineer answering based strictly on the retrieved Stack Exchange evidence below.\n\n"
+            "STRICT RULES:\n"
+            "1. Use ONLY information present in the Retrieved Evidence. Do NOT add facts, links, quotes, or examples that are not explicitly in the sources.\n"
+            "2. If the sources do not contain enough information to answer, say exactly: \"The retrieved sources do not contain enough information to answer this question.\" and stop.\n"
+            "3. Do NOT invent URLs, stack traces, variable names, or code that is not shown in the sources.\n\n"
             f"Retrieved Evidence:\n{context}\n\n"
             f"{sub_q_block}"
             f"Instruction: {cot_instruction}\n\n"
