@@ -5,7 +5,7 @@ Optimised for M1/M2/M3/M4 Apple Silicon Macs.
 Uses the Neural Engine via MLX -- 3-5x faster than PyTorch MPS.
 
 Expected time on M4 16GB:
-  ~45-90 minutes for 1000 iterations
+  ~3-5 hours for 1000 iterations (batch=1)
 
 Usage:
   python3 src/train_mlx.py
@@ -28,10 +28,10 @@ MODEL_NAME   = "google/gemma-2-2b-it"
 DATA_DIR     = "data/mlx_data"
 OUTPUT_DIR   = "outputs/gemma-2-2b-it-mlx-lora"
 ITERS        = 1000
-BATCH_SIZE   = 4
+BATCH_SIZE   = 1      # reduced from 4 -- prevents Metal OOM on M4 16GB
 LEARN_RATE   = 2e-4
-NUM_LAYERS   = 8      # --num-layers (renamed from --lora-layers in newer mlx_lm)
-VAL_BATCHES  = 25
+NUM_LAYERS   = 4      # reduced from 8 -- fewer LoRA layers = less GPU memory
+VAL_BATCHES  = 10     # reduced from 25 -- shorter eval pass
 
 
 def check_mlx():
@@ -89,13 +89,15 @@ def convert_to_mlx_format(src: str = "data/finetune_dataset.jsonl"):
 def run_training():
     Path(OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
 
-    # New mlx_lm CLI: `mlx_lm.lora` subcommand syntax
-    # --lora-layers was renamed to --num-layers in mlx_lm >= 0.18
+    # --grad-checkpoint: trades compute for memory (essential for 16GB M4)
+    # --num-layers 4: only 4 LoRA layers instead of 8 -- halves gradient memory
+    # --batch-size 1: single sample per step -- prevents Metal OOM
     cmd = [
         sys.executable, "-m", "mlx_lm", "lora",
         "--model",         MODEL_NAME,
         "--data",          DATA_DIR,
         "--train",
+        "--grad-checkpoint",
         "--batch-size",    str(BATCH_SIZE),
         "--iters",         str(ITERS),
         "--learning-rate", str(LEARN_RATE),
