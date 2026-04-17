@@ -49,21 +49,34 @@ class _MLXGenerator:
         from mlx_lm import generate
         from mlx_lm.sample_utils import make_sampler
 
-        # repetition_penalty=1.2 prevents the model from looping repeated tokens
-        # temp=0.7 and top_p=0.9 match the PyTorch fallback for consistent behaviour
-        sampler = make_sampler(
-            temp=0.7,
-            top_p=0.9,
-            repetition_penalty=1.2,
-            repetition_context_size=20,
+        # Build sampler with temp + top_p
+        sampler = make_sampler(temp=0.7, top_p=0.9)
+
+        # Add repetition penalty via logits processor if supported
+        logits_processors = None
+        try:
+            from mlx_lm.sample_utils import make_logits_processors
+            logits_processors = make_logits_processors(
+                repetition_penalty=1.2,
+                repetition_context_size=20,
+            )
+        except (ImportError, TypeError):
+            # Older mlx_lm versions don't have make_logits_processors -- skip gracefully
+            pass
+
+        kwargs = dict(
+            max_tokens=self.max_new_tokens,
+            sampler=sampler,
+            verbose=False,
         )
+        if logits_processors is not None:
+            kwargs["logits_processors"] = logits_processors
+
         response = generate(
             self.model,
             self.tokenizer,
             prompt=prompt,
-            max_tokens=self.max_new_tokens,
-            sampler=sampler,
-            verbose=False,
+            **kwargs,
         )
         return response.strip()
 
