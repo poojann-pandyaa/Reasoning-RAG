@@ -47,11 +47,22 @@ class _MLXGenerator:
 
     def invoke(self, prompt: str) -> str:
         from mlx_lm import generate
+        from mlx_lm.sample_utils import make_sampler
+
+        # repetition_penalty=1.2 prevents the model from looping repeated tokens
+        # temp=0.7 and top_p=0.9 match the PyTorch fallback for consistent behaviour
+        sampler = make_sampler(
+            temp=0.7,
+            top_p=0.9,
+            repetition_penalty=1.2,
+            repetition_context_size=20,
+        )
         response = generate(
             self.model,
             self.tokenizer,
             prompt=prompt,
             max_tokens=self.max_new_tokens,
+            sampler=sampler,
             verbose=False,
         )
         return response.strip()
@@ -104,7 +115,7 @@ class _TorchGenerator:
             do_sample=True,
             temperature=0.7,
             top_p=0.9,
-            repetition_penalty=1.1,
+            repetition_penalty=1.2,
             return_full_text=False,
         )
 
