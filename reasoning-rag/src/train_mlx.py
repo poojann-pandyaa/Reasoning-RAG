@@ -5,13 +5,18 @@ Optimised for M1/M2/M3/M4 Apple Silicon Macs.
 Uses the Neural Engine via MLX -- 3-5x faster than PyTorch MPS.
 
 Expected time on M4 16GB:
-  ~3-5 hours for 1000 iterations (batch=1)
+  v1 (1000 iters): ~3-5 hours
+  v2 (2000 iters): ~6-8 hours  <-- recommended, run overnight
 
-Usage:
+Usage (v2 -- recommended, accepted answers only):
+  python3 src/train_mlx.py --v2
+
+Usage (v1 -- original run, kept for reproducibility):
   python3 src/train_mlx.py
 
 Output:
-  outputs/gemma-2-2b-it-mlx-lora/  -- LoRA adapter weights (~50-100 MB)
+  v1: outputs/gemma-2-2b-it-mlx-lora/
+  v2: outputs/gemma-2-2b-it-mlx-lora-v2/
 
 Requirements:
   pip3 install mlx mlx-lm
@@ -26,12 +31,22 @@ from pathlib import Path
 
 MODEL_NAME   = "google/gemma-2-2b-it"
 DATA_DIR     = "data/mlx_data"
-OUTPUT_DIR   = "outputs/gemma-2-2b-it-mlx-lora"
-ITERS        = 1000
-BATCH_SIZE   = 1      # reduced from 4 -- prevents Metal OOM on M4 16GB
-LEARN_RATE   = 2e-4
-NUM_LAYERS   = 4      # reduced from 8 -- fewer LoRA layers = less GPU memory
-VAL_BATCHES  = 10     # reduced from 25 -- shorter eval pass
+
+# v1 config (original)
+V1_OUTPUT_DIR  = "outputs/gemma-2-2b-it-mlx-lora"
+V1_ITERS       = 1000
+V1_BATCH_SIZE  = 1
+V1_LEARN_RATE  = 2e-4
+V1_NUM_LAYERS  = 4
+V1_VAL_BATCHES = 10
+
+# v2 config -- accepted-only data, more iters, lower LR, more LoRA layers
+V2_OUTPUT_DIR  = "outputs/gemma-2-2b-it-mlx-lora-v2"
+V2_ITERS       = 2000
+V2_BATCH_SIZE  = 1
+V2_LEARN_RATE  = 1e-5
+V2_NUM_LAYERS  = 8
+V2_VAL_BATCHES = 25
 
 
 def check_mlx():
@@ -86,24 +101,21 @@ def convert_to_mlx_format(src: str = "data/finetune_dataset.jsonl"):
     print(f"MLX data ready in {DATA_DIR}/")
 
 
-def run_training():
-    Path(OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
+def run_training(output_dir, iters, batch_size, learn_rate, num_layers, val_batches):
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
 
-    # --grad-checkpoint: trades compute for memory (essential for 16GB M4)
-    # --num-layers 4: only 4 LoRA layers instead of 8 -- halves gradient memory
-    # --batch-size 1: single sample per step -- prevents Metal OOM
     cmd = [
         sys.executable, "-m", "mlx_lm", "lora",
         "--model",         MODEL_NAME,
         "--data",          DATA_DIR,
         "--train",
         "--grad-checkpoint",
-        "--batch-size",    str(BATCH_SIZE),
-        "--iters",         str(ITERS),
-        "--learning-rate", str(LEARN_RATE),
-        "--num-layers",    str(NUM_LAYERS),
-        "--val-batches",   str(VAL_BATCHES),
-        "--adapter-path",  OUTPUT_DIR,
+        "--batch-size",    str(batch_size),
+        "--iters",         str(iters),
+        "--learning-rate", str(learn_rate),
+        "--num-layers",    str(num_layers),
+        "--val-batches",   str(val_batches),
+        "--adapter-path",  output_dir,
         "--save-every",    "200",
     ]
 
@@ -113,13 +125,13 @@ def run_training():
     subprocess.run(cmd, check=True)
 
 
-def fuse_adapter():
-    fused_dir = "outputs/gemma-2-2b-it-fused"
+def fuse_adapter(output_dir):
+    fused_dir = output_dir + "-fused"
     Path(fused_dir).mkdir(parents=True, exist_ok=True)
     cmd = [
         sys.executable, "-m", "mlx_lm", "fuse",
         "--model",        MODEL_NAME,
-        "--adapter-path", OUTPUT_DIR,
+        "--adapter-path", output_dir,
         "--save-path",    fused_dir,
     ]
     print("\nFusing LoRA adapter into base model ...")
@@ -130,6 +142,11 @@ def fuse_adapter():
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--v2",
+        action="store_true",
+        help="Train v2: accepted-only data, 2000 iters, lr=1e-5, 8 LoRA layers. Run overnight."
+    )
     parser.add_argument("--skip-data-prep", action="store_true",
                         help="Skip data conversion (if already done)")
     parser.add_argument("--fuse", action="store_true",
@@ -142,22 +159,56 @@ if __name__ == "__main__":
     print(" Reasoning-RAG -- MLX Fine-tuning (M4 Mac, Gemma-2-2B-IT)")
     print("=" * 60)
 
-    if not args.skip_data_prep:
-        print("\nStep 1: Converting dataset to MLX format ...")
-        convert_to_mlx_format()
-    else:
-        print("\nStep 1: Skipping data prep (--skip-data-prep set)")
+    if args.v2:
+        output_dir  = V2_OUTPUT_DIR
+        iters       = V2_ITERS
+        batch_size  = V2_BATCH_SIZE
+        learn_rate  = V2_LEARN_RATE
+        num_layers  = V2_NUM_LAYERS
+        val_batches = V2_VAL_BATCHES
+        data_src    = "data/finetune_dataset.jsonl"
+        print("\n[v2] Config: 2000 iters | lr=1e-5 | 8 LoRA layers | accepted-only data")
+        print(f"[v2] Output: {output_dir}")
 
-    print("\nStep 2: Fine-tuning Gemma-2-2B-IT with LoRA ...")
-    run_training()
+        if not args.skip_data_prep:
+            print("\nStep 1: Rebuilding dataset (accepted answers only) ...")
+            subprocess.run([
+                sys.executable,
+                "src/ingestion/prepare_finetune.py",
+                "--input",  "data/processed_dataset.jsonl",
+                "--output", data_src,
+                "--accepted-only",
+            ], check=True)
+            print("\nStep 2: Converting to MLX format ...")
+            convert_to_mlx_format(src=data_src)
+        else:
+            print("\nStep 1+2: Skipping data prep (--skip-data-prep set)")
+    else:
+        output_dir  = V1_OUTPUT_DIR
+        iters       = V1_ITERS
+        batch_size  = V1_BATCH_SIZE
+        learn_rate  = V1_LEARN_RATE
+        num_layers  = V1_NUM_LAYERS
+        val_batches = V1_VAL_BATCHES
+        print("\n[v1] Config: 1000 iters | lr=2e-4 | 4 LoRA layers | all answers")
+        print(f"[v1] Output: {output_dir}")
+
+        if not args.skip_data_prep:
+            print("\nStep 1: Converting dataset to MLX format ...")
+            convert_to_mlx_format()
+        else:
+            print("\nStep 1: Skipping data prep (--skip-data-prep set)")
+
+    print("\nStep 3: Fine-tuning Gemma-2-2B-IT with LoRA ...")
+    run_training(output_dir, iters, batch_size, learn_rate, num_layers, val_batches)
 
     if args.fuse:
-        print("\nStep 3: Fusing adapter ...")
-        fuse_adapter()
+        print("\nStep 4: Fusing adapter ...")
+        fuse_adapter(output_dir)
 
     print("\n" + "=" * 60)
     print("Training complete!")
-    print(f"LoRA adapter saved to: {OUTPUT_DIR}")
-    print("\nTo run inference with fine-tuned model:")
-    print("  python3 src/demo.py --adapter outputs/gemma-2-2b-it-mlx-lora")
+    print(f"LoRA adapter saved to: {output_dir}")
+    print("\nTo compare base vs fine-tuned:")
+    print(f"  python3 src/evaluation/compare_demo.py --adapter {output_dir}")
     print("=" * 60)

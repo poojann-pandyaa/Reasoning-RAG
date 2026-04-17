@@ -11,26 +11,39 @@ Each output record is a Gemma-IT instruction-following example:
   "text":   "<full Gemma chat-formatted string>"   # used directly by SFTTrainer
 }
 
-Usage:
+Usage (default -- accepted + fallback to highest-scored):
   python3 src/ingestion/prepare_finetune.py \
       --input  data/processed_dataset.jsonl \
       --output data/finetune_dataset.jsonl
+
+Usage (accepted answers only -- recommended for fine-tuning v2):
+  python3 src/ingestion/prepare_finetune.py \
+      --input  data/processed_dataset.jsonl \
+      --output data/finetune_dataset.jsonl \
+      --accepted-only
 """
 
 import argparse
 import json
 import random
 from pathlib import Path
-from typing import Optional  # Python 3.9 compatible
+from typing import Optional
 
 
-def pick_best_answer(answers: list) -> Optional[dict]:  # use Optional instead of dict | None
-    """Return the accepted answer if present, otherwise the highest-scored one."""
+def pick_best_answer(answers: list, accepted_only: bool = False) -> Optional[dict]:
+    """Return the accepted answer if present.
+    If accepted_only=True, returns None when no accepted answer exists.
+    Otherwise falls back to the highest-scored answer.
+    """
     if not answers:
         return None
     accepted = [a for a in answers if a.get("is_accepted") or a.get("selected")]
     if accepted:
         return max(accepted, key=lambda a: a.get("score", a.get("pm_score", 0)))
+    if accepted_only:
+        # No accepted answer -- skip this question entirely
+        return None
+    # Fallback: highest-scored unaccepted answer
     return max(answers, key=lambda a: a.get("score", a.get("pm_score", 0)))
 
 
@@ -49,9 +62,16 @@ def format_gemma_chat(question: str, answer: str) -> str:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input",  default="data/processed_dataset.jsonl")
-    parser.add_argument("--output", default="data/finetune_dataset.jsonl")
-    parser.add_argument("--seed",   type=int, default=42)
+    parser.add_argument("--input",         default="data/processed_dataset.jsonl")
+    parser.add_argument("--output",        default="data/finetune_dataset.jsonl")
+    parser.add_argument("--seed",          type=int, default=42)
+    parser.add_argument(
+        "--accepted-only",
+        action="store_true",
+        help="Only use questions that have an accepted answer. "
+             "Skips questions where only unaccepted answers exist. "
+             "Recommended for fine-tuning v2 -- produces cleaner training data."
+    )
     args = parser.parse_args()
 
     random.seed(args.seed)
@@ -61,6 +81,7 @@ def main():
 
     skipped = 0
     written = 0
+    skipped_no_accepted = 0
 
     with input_path.open() as fin, output_path.open("w") as fout:
         for line in fin:
@@ -77,9 +98,15 @@ def main():
                 skipped += 1
                 continue
 
-            best = pick_best_answer(record.get("answers", []))
+            best = pick_best_answer(
+                record.get("answers", []),
+                accepted_only=args.accepted_only,
+            )
             if not best:
-                skipped += 1
+                if args.accepted_only:
+                    skipped_no_accepted += 1
+                else:
+                    skipped += 1
                 continue
 
             answer_text = best.get("body_clean") or best.get("text", "")
@@ -97,7 +124,11 @@ def main():
             fout.write(json.dumps(out) + "\n")
             written += 1
 
-    print(f"Done. Written: {written} | Skipped: {skipped}")
+    print(f"Done. Written: {written} | Skipped: {skipped}", end="")
+    if args.accepted_only:
+        print(f" | Skipped (no accepted answer): {skipped_no_accepted}")
+    else:
+        print()
     print(f"Output -> {output_path}")
 
 
