@@ -47,36 +47,26 @@ class _MLXGenerator:
 
     def invoke(self, prompt: str) -> str:
         from mlx_lm import generate
-        from mlx_lm.sample_utils import make_sampler
+        from mlx_lm.sample_utils import make_sampler, make_repetition_penalty
 
-        # Build sampler with temp + top_p
+        # make_sampler handles temp + top_p
         sampler = make_sampler(temp=0.7, top_p=0.9)
 
-        # Add repetition penalty via logits processor if supported
-        logits_processors = None
-        try:
-            from mlx_lm.sample_utils import make_logits_processors
-            logits_processors = make_logits_processors(
-                repetition_penalty=1.2,
-                repetition_context_size=20,
-            )
-        except (ImportError, TypeError):
-            # Older mlx_lm versions don't have make_logits_processors -- skip gracefully
-            pass
-
-        kwargs = dict(
-            max_tokens=self.max_new_tokens,
-            sampler=sampler,
-            verbose=False,
+        # make_repetition_penalty is the correct API in mlx_lm 0.29.x
+        # penalty=1.2 prevents repetition loops, context_size=20 looks back 20 tokens
+        repetition_penalty = make_repetition_penalty(
+            penalty=1.2,
+            context_size=20,
         )
-        if logits_processors is not None:
-            kwargs["logits_processors"] = logits_processors
 
         response = generate(
             self.model,
             self.tokenizer,
             prompt=prompt,
-            **kwargs,
+            max_tokens=self.max_new_tokens,
+            sampler=sampler,
+            logits_processors=[repetition_penalty],
+            verbose=False,
         )
         return response.strip()
 
