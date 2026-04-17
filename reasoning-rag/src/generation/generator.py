@@ -161,7 +161,8 @@ class FinalGenerator:
             meta       = cand["metadata"]
             score      = meta.get("score", 0)
             is_acc     = meta.get("is_accepted", False)
-            chunk_text = meta.get("chunk_text", "")[:800]
+            # Raised from 800 → 1200 chars so the model has more evidence to reason over
+            chunk_text = meta.get("chunk_text", "")[:1200]
             domain     = meta.get("domain", "unknown")
             context_parts.append(
                 f"[Source {i+1} | Score: {score} | Accepted: {is_acc} | Domain: {domain}]\n{chunk_text}"
@@ -170,20 +171,23 @@ class FinalGenerator:
         context = "\n\n".join(context_parts)
 
         cot_instructions = {
+            # "concisely" replaced with "thoroughly" -- previously caused 1-sentence answers
             "commonsense": (
-                "Answer the question directly and concisely based on the sources above. "
-                "Cite which source you used."
+                "Answer the question thoroughly and helpfully based on the sources above. "
+                "Explain the concept, include code examples if the sources contain them, "
+                "and cite which source(s) you used. Write at least 3-4 sentences."
             ),
             "adaptive": (
                 "The question has multiple parts. "
                 "First address each sub-question separately using the sources, "
-                "then synthesise everything into a single unified answer."
+                "then synthesise everything into a single unified answer. "
+                "Be thorough -- include examples and code where relevant."
             ),
             "strategic": (
                 "This is a complex comparative or architectural question. "
                 "Step 1 - identify the main categories or dimensions relevant to the query. "
-                "Step 2 - discuss each dimension using evidence from the sources. "
-                "Step 3 - write a final synthesised recommendation."
+                "Step 2 - discuss each dimension in depth using evidence from the sources. "
+                "Step 3 - write a final synthesised recommendation with reasoning."
             ),
         }
         cot_instruction = cot_instructions.get(reasoning_type, cot_instructions["commonsense"])
@@ -197,11 +201,17 @@ class FinalGenerator:
         # Gemma-2 IT chat template
         prompt = (
             "<start_of_turn>user\n"
-            "You are a senior software engineer answering based strictly on the retrieved Stack Exchange evidence below.\n\n"
-            "STRICT RULES:\n"
-            "1. Use ONLY information present in the Retrieved Evidence. Do NOT add facts, links, quotes, or examples that are not explicitly in the sources.\n"
-            "2. If the sources do not contain enough information to answer, say exactly: \"The retrieved sources do not contain enough information to answer this question.\" and stop.\n"
-            "3. Do NOT invent URLs, stack traces, variable names, or code that is not shown in the sources.\n\n"
+            "You are a senior software engineer answering Stack Overflow questions. "
+            "Use the retrieved evidence below as your primary source, but you may elaborate "
+            "on concepts, explain reasoning, and provide structure to make the answer clear.\n\n"
+            "RULES:\n"
+            "1. Base your answer on the Retrieved Evidence. Do not invent facts that contradict the sources.\n"
+            "2. If the sources do not contain enough information to answer, say exactly: "
+            "\"The retrieved sources do not contain enough information to answer this question.\" and stop.\n"
+            "3. You MAY explain, expand, and structure information from the sources -- "
+            "do not copy-paste raw source text verbatim.\n"
+            "4. Include code blocks using markdown (```language) if the sources contain code "
+            "or if a code example would make the answer significantly clearer.\n\n"
             f"Retrieved Evidence:\n{context}\n\n"
             f"{sub_q_block}"
             f"Instruction: {cot_instruction}\n\n"
