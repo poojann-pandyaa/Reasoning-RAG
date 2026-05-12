@@ -1,10 +1,12 @@
 """
 generator.py
 ------------
-FinalGenerator using MLX-native inference on Apple Silicon (M1/M2/M3/M4).
-Falls back to PyTorch (MPS -> CPU) if MLX is unavailable.
+FinalGenerator with three backends, selected by priority:
+  1. HuggingFace Inference API  -- if HF_TOKEN env var is set (zero RAM in pod)
+  2. MLX                        -- Apple Silicon (M1/M2/M3/M4)
+  3. PyTorch                    -- last resort (WARNING: OOMs on CPU with Gemma)
 
-Default model: google/gemma-2-2b-it (Gemma 2 -- upgraded from Gemma 1)
+Default model: google/gemma-2-2b-it
 For fine-tuning, see: src/train_mlx.py
 """
 
@@ -22,7 +24,39 @@ def _mlx_available() -> bool:
 
 
 # ---------------------------------------------------------------------------
-# MLX backend (primary -- Apple Silicon)
+# HuggingFace Inference API backend (primary -- no model loaded in pod)
+# ---------------------------------------------------------------------------
+
+class _HFAPIGenerator:
+    def __init__(
+        self,
+        model_name: str = "google/gemma-2-2b-it",
+        max_new_tokens: int = 512,
+    ):
+        from huggingface_hub import InferenceClient
+        self._token = os.environ.get("HF_TOKEN")
+        if not self._token:
+            raise EnvironmentError("[HFAPI] HF_TOKEN env var not set.")
+        print(f"[HFAPI] Using HuggingFace Inference API: {model_name}")
+        self._client         = InferenceClient(token=self._token)
+        self._model          = model_name
+        self._max_new_tokens = max_new_tokens
+
+    def invoke(self, prompt: str) -> str:
+        response = self._client.text_generation(
+            prompt,
+            model=self._model,
+            max_new_tokens=self._max_new_tokens,
+            temperature=0.7,
+            top_p=0.9,
+            repetition_penalty=1.2,
+            do_sample=True,
+        )
+        return response.strip()
+
+
+# ---------------------------------------------------------------------------
+# MLX backend (Apple Silicon fallback)
 # ---------------------------------------------------------------------------
 
 class _MLXGenerator:
@@ -50,13 +84,10 @@ class _MLXGenerator:
         from mlx_lm.sample_utils import make_sampler, make_repetition_penalty
 
         sampler = make_sampler(temp=0.7, top_p=0.9)
-
-        # make_repetition_penalty is the correct API in mlx_lm 0.29.x
         repetition_penalty = make_repetition_penalty(
             penalty=1.2,
             context_size=20,
         )
-
         response = generate(
             self.model,
             self.tokenizer,
@@ -70,7 +101,7 @@ class _MLXGenerator:
 
 
 # ---------------------------------------------------------------------------
-# PyTorch fallback (non-Apple or MLX not installed)
+# PyTorch fallback (last resort -- will OOM on CPU with Gemma)
 # ---------------------------------------------------------------------------
 
 class _TorchGenerator:
@@ -97,7 +128,7 @@ class _TorchGenerator:
         model = AutoModelForCausalLM.from_pretrained(
             model_name,
             torch_dtype=torch.float32,
-            device_map={"" : device},
+            device_map={"": device},
             trust_remote_code=True,
         )
 
@@ -121,18 +152,20 @@ class _TorchGenerator:
         )
 
     def invoke(self, prompt: str) -> str:
-        result = self._pipe(prompt)
-        return result[0]["generated_text"].strip()
+        return self._pipe(prompt)[0]["generated_text"].strip()
 
 
 # ---------------------------------------------------------------------------
 # Public FinalGenerator -- auto-selects backend
+# Priority: HF API (if HF_TOKEN set) > MLX > PyTorch
 # ---------------------------------------------------------------------------
 
 class FinalGenerator:
     """
-    Drop-in replacement for the old flan-t5-base generator.
-    Automatically uses MLX on Apple Silicon, falls back to PyTorch elsewhere.
+    FinalGenerator with automatic backend selection.
+    - Set HF_TOKEN env var to use HuggingFace Inference API (recommended for k8s).
+    - On Apple Silicon without HF_TOKEN, uses MLX natively.
+    - Falls back to PyTorch CPU as last resort (not recommended for Gemma -- OOM risk).
     Default model: google/gemma-2-2b-it
     """
 
@@ -142,11 +175,14 @@ class FinalGenerator:
         lora_adapter_path: Optional[str] = None,
         max_new_tokens: int = 512,
     ):
-        if _mlx_available():
+        if os.environ.get("HF_TOKEN"):
+            print("[Generator] Backend: HuggingFace Inference API")
+            self._backend = _HFAPIGenerator(model_name, max_new_tokens)
+        elif _mlx_available():
             print("[Generator] Backend: MLX (Apple Silicon)")
             self._backend = _MLXGenerator(model_name, lora_adapter_path, max_new_tokens)
         else:
-            print("[Generator] Backend: PyTorch (install mlx-lm for better performance on Mac)")
+            print("[Generator] Backend: PyTorch (WARNING: will OOM on CPU with Gemma)")
             self._backend = _TorchGenerator(model_name, lora_adapter_path, max_new_tokens)
 
     def build_prompt(
@@ -161,7 +197,6 @@ class FinalGenerator:
             meta       = cand["metadata"]
             score      = meta.get("score", 0)
             is_acc     = meta.get("is_accepted", False)
-            # Raised from 800 → 1200 chars so the model has more evidence to reason over
             chunk_text = meta.get("chunk_text", "")[:1200]
             domain     = meta.get("domain", "unknown")
             context_parts.append(
@@ -171,7 +206,6 @@ class FinalGenerator:
         context = "\n\n".join(context_parts)
 
         cot_instructions = {
-            # "concisely" replaced with "thoroughly" -- previously caused 1-sentence answers
             "commonsense": (
                 "Answer the question thoroughly and helpfully based on the sources above. "
                 "Explain the concept, include code examples if the sources contain them, "

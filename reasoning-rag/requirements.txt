@@ -21,8 +21,12 @@ rank_bm25
 # LangChain
 langchain
 langchain-community
+langchain-huggingface
 langchain-openai
 openai
+
+# HuggingFace Hub (Inference API)
+huggingface_hub>=0.23.0
 
 # Evaluation
 evaluate
